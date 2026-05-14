@@ -1,0 +1,142 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;700;800;900&display=swap');
+
+:root {
+  --primary: #1e7cff;
+  --primary-2: #46b0ff;
+  --primary-rgb: 30, 124, 255;
+  --success: #1dd75f;
+  --danger: #ff3b5c;
+  --warning: #ffb11e;
+
+  --app-bg: #060a12;
+  --panel: #0d1421;
+  --panel-2: #090e18;
+  --input: #0a111c;
+  --chip: rgba(255, 255, 255, 0.05);
+  --border: rgba(255, 255, 255, 0.08);
+  --text: rgba(255, 255, 255, 0.94);
+  --muted: rgba(255, 255, 255, 0.55);
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.55);
+  
+  --font-main: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Outfit', sans-serif;
+
+  /* Standard Breakpoints */
+  --breakpoint-mobile: 768px;
+  --breakpoint-tablet: 1024px;
+  --topbar-height: 64px;
+}
+
+:root[data-theme='light'] {
+  --app-bg: #f8faff;
+  --panel: #ffffff;
+  --panel-2: #f2f5ff;
+  --input: #f5f8ff;
+  --chip: rgba(0, 0, 0, 0.03);
+  --border: rgba(0, 0, 0, 0.08);
+  --text: #0f172a;
+  --muted: #64748b;
+  --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body {
+  height: 100dvh; /* Dynamic viewport height for mobile browsers */
+  width: 100vw;
+  margin: 0;
+  overflow: hidden; /* Prevent body scroll, let containers handle it */
+  position: fixed; /* Prevent rubber-banding on some browsers */
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--text);
+  font-family: var(--font-main);
+  line-height: 1.5;
+}
+
+h1, h2, h3, h4, .brand, .title {
+  font-family: var(--font-display);
+}
+
+a {
+  color: inherit;
+  transition: all 0.2s ease;
+}
+
+.scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--primary-rgb), 0.3) transparent;
+}
+
+.scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.scroll::-webkit-scrollbar-thumb {
+  background: rgba(var(--primary-rgb), 0.2);
+  border-radius: 10px;
+}
+
+.scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--primary-rgb), 0.4);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in {
+  animation: fadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Responsive Utilities */
+.hide-mobile {
+  @media (max-width: 768px) {
+    display: none !important;
+  }
+}
+
+.show-mobile {
+  display: none !important;
+  @media (max-width: 768px) {
+    display: block !important;
+  }
+}
+
+.flex-show-mobile {
+  display: none !important;
+  @media (max-width: 768px) {
+    display: flex !important;
+  }
+}
+
+/* Container Responsiveness */
+.container {
+  width: 100%;
+  padding-left: clamp(1rem, 5vw, 2rem);
+  padding-right: clamp(1rem, 5vw, 2rem);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (min-width: 640px) { .container { max-width: 640px; } }
+@media (min-width: 768px) { .container { max-width: 768px; } }
+@media (min-width: 1024px) { .container { max-width: 1024px; } }
+@media (min-width: 1280px) { .container { max-width: 1200px; } }
+
+/* Edge/Chrome Specific Improvements */
+@supports (-webkit-touch-callout: none) {
+  /* iOS-like safe area insets for mobile edge/chrome */
+  .layout {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+

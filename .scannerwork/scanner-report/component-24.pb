@@ -1,0 +1,1 @@
+ 2tsXPhrMsrc/app/features/auth/components/forgot-password/forgot-password.component.ts

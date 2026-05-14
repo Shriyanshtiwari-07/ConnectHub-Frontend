@@ -1,0 +1,49 @@
+I
+4javascript.telemetry.typescript.compiler-options.libdom,es2022,es2023U
+Mjavascript.telemetry.typescript.compiler-options.strictPropertyInitializationtrueS
+Kjavascript.telemetry.typescript.compiler-options.useUnknownInCatchVariablestrueL
+Djavascript.telemetry.typescript.compiler-options.strictFunctionTypestrue
+text.civendor_semaphore07
+.javascript.telemetry.typescript.native-previewfalse!
+text.civendor_azurepipelines0"
+jre_provisioning_disabledfalseF
+>javascript.telemetry.typescript.compiler-options.noImplicitAnytrue&
+sonar.scanner.appVersion
+3.1.0.1141
+text.analyzed_files_count63 
+text.civendor_dockercompose0
+text.civendor_appveyor0E
+=javascript.telemetry.typescript.compiler-options.alwaysStricttrue%
+ text.analyzed_hidden_files_count01
+(javascript.telemetry.typescript.versions5.9.2#
+javascript.runtime.version24.112
+(javascript.telemetry.ecmascript.versionsES2023L
+Djavascript.telemetry.typescript.compiler-options.strictBindCallApplytrueC
+7javascript.telemetry.typescript.compiler-options.modulepreserveE
+=javascript.telemetry.typescript.compiler-options.skipLibChecktrueG
+?javascript.telemetry.typescript.compiler-options.noImplicitThistrueI
+Ajavascript.telemetry.typescript.compiler-options.strictNullCheckstrue
+sonar.scanner.app
+ScannerCli
+text.civendor_circleci0<
+7javascript.telemetry.typescript.program-creation.failed0&
+ javascript.runtime.major-version24?
+7javascript.telemetry.typescript.compiler-options.stricttrue
+text.civendor_bamboo0
+text.civendor_buildkite0?
+:javascript.telemetry.typescript.program-creation.succeeded35
+)javascript.runtime.node-executable-originembedded
+text.civendor_gitlab0
+text.civendor_travisci0$
+text.sensor_time_ms_community916%
+ text.civendor_bitbucketpipelines0
+text.civendor_jenkins05
+/javascript.telemetry.module-type.cjs-file-count61$
+scanner.git_remote_url
+UNDETECTED&
+!text.all_tracked_text_files_count0A
+7javascript.telemetry.typescript.compiler-options.targetes2022H
+@javascript.telemetry.typescript.compiler-options.isolatedModulestrue?
+:javascript.telemetry.typescript.program-creation.attempted3T
+Ljavascript.telemetry.typescript.compiler-options.strictBuiltinIteratorReturntrue4
+/javascript.telemetry.module-type.esm-file-count0

@@ -1,0 +1,83 @@
+export type RoomType = 'GROUP' | 'DM';
+export type MessageType = 'TEXT' | 'IMAGE' | 'FILE' | 'AUDIO' | 'REACTION' | 'SYSTEM';
+export type DeliveryStatus = 'SENDING' | 'SENT' | 'DELIVERED' | 'READ' | 'FAILED';
+
+export interface Room {
+  roomId: string;
+  name: string;
+  description?: string;
+  type: RoomType;
+  avatarUrl?: string;
+  isPrivate?: boolean;
+  maxMembers?: number;
+  lastMessageAt?: string;
+  lastMessageContent?: string;
+  lastMessageSender?: string;
+  unreadCount?: number;
+  createdById?: string;
+  createdAt?: string;
+  status?: string;
+  members?: RoomMember[];
+}
+
+export type RoomMemberRole = 'ADMIN' | 'MEMBER';
+
+export interface RoomMember {
+  memberId: string;
+  roomId: string;
+  userId: string;
+  role: RoomMemberRole;
+  joinedAt?: string;
+  lastReadAt?: string;
+  isMuted?: boolean;
+  username: string;
+  fullName?: string;
+  avatarUrl?: string;
+  status?: 'ONLINE' | 'AWAY' | 'DND' | 'INVISIBLE';
+  lastSeenAt?: string;
+  bio?: string;
+  email?: string;
+}
+
+export interface MessageReaction {
+  emoji: string;
+  userIds: string[];
+}
+
+export interface Message {
+  messageId: string;
+  roomId: string;
+  senderId: string;
+  content?: string;
+  type: MessageType;
+  mediaUrl?: string;
+  thumbnailUrl?: string;
+  fileName?: string;
+  mimeType?: string;
+  sizeKb?: number;
+  replyToMessageId?: string;
+  replyTo?: Pick<Message, 'messageId' | 'senderId' | 'content' | 'type' | 'mediaUrl'>;
+  isEdited?: boolean;
+  isDeleted?: boolean;
+  deliveryStatus?: DeliveryStatus;
+  isRead?: boolean;
+  reactions?: Record<string, MessageReaction>;
+  sentAt: string;
+  editedAt?: string;
+  senderName?: string;
+  roomType?: string;
+}
+
+export interface NotificationItem {
+  notificationId: string;
+  recipientId: string;
+  actorId?: string;
+  type: 'NEW_MESSAGE' | 'MENTION' | 'ROOM_INVITE' | 'SYSTEM';
+  title: string;
+  message: string;
+  roomId?: string;
+  messageId?: string;
+  isRead: boolean;
+  createdAt: string;
+}
+

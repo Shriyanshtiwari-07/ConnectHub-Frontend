@@ -1,0 +1,354 @@
+import { Component, computed, effect, inject, signal, OnDestroy } from '@angular/core';
+import { ActivatedRoute, Router } from '@angular/router';
+import { RoomSidebarComponent } from '../room-sidebar/room-sidebar.component';
+import { ChatWindowComponent } from '../chat-window/chat-window.component';
+import { UserSearchComponent } from '../user-search/user-search.component';
+import { NgIf } from '@angular/common';
+import type { Room } from '../../../../shared/models/chat.models';
+import type { UserProfile } from '../../../../shared/models/auth.models';
+import { RoomsService } from '../../../rooms/services/rooms.service';
+import { AuthService } from '../../../../core/services/auth.service';
+import { PresenceService } from '../../../../core/services/presence.service';
+import { WebsocketService } from '../../../../core/services/websocket.service';
+import { PushNotificationService } from '../../../../core/services/push-notification.service';
+import { MessagesService } from '../../services/messages.service';
+import { Subscription } from 'rxjs';
+
+@Component({
+  selector: 'app-chat-layout',
+  standalone: true,
+  imports: [RoomSidebarComponent, ChatWindowComponent, UserSearchComponent, NgIf],
+  template: `
+    <div class="layout" [class.sidebar-hidden]="!isSidebarVisible()">
+      <app-room-sidebar
+        class="sidebar"
+        [rooms]="rooms()"
+        [users]="users()"
+        [me]="auth.me()"
+        [loading]="isLoadingUsers()"
+        [presenceMap]="presence.presenceMap()"
+        [activeRoomId]="activeRoomId()"
+        [unreadByRoom]="unreadByRoom()"
+        (createRoom)="openCreateRoom()"
+        (openRoom)="onRoomSelected($event)"
+        (openDM)="onDMSelected($event)"
+      />
+
+      <app-chat-window
+        class="main"
+        *ngIf="!isSidebarVisible() || isDesktop()"
+        [room]="activeRoom()"
+        [meUserId]="meUserId()"
+        (openMembers)="toggleMembers()"
+        (openRoomSettings)="openRoomSettings()"
+        (goBack)="showSidebar()"
+      />
+
+      <app-user-search 
+        *ngIf="showUserSearch()" 
+        (close)="showUserSearch.set(false)"
+      />
+    </div>
+  `,
+  styles: `
+    .layout {
+      height: 100dvh; /* Dynamic viewport height */
+      display: grid;
+      grid-template-columns: clamp(300px, 30vw, 400px) 1fr;
+      background: var(--app-bg);
+      overflow: hidden;
+      position: relative;
+    }
+    .sidebar {
+      z-index: 20;
+      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .main {
+      min-width: 0;
+      height: 100%;
+      z-index: 10;
+    }
+    @media (max-width: 1024px) {
+      .layout {
+        grid-template-columns: 320px 1fr;
+      }
+    }
+    @media (max-width: 768px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: absolute;
+        inset: 0;
+        transform: translateX(0);
+      }
+      .sidebar-hidden .sidebar {
+        transform: translateX(-100%);
+        pointer-events: none;
+      }
+      .main {
+        width: 100%;
+      }
+    }
+  `,
+})
+export class ChatLayoutComponent implements OnDestroy {
+  readonly rooms = signal<Room[]>([]);
+  readonly users = signal<UserProfile[]>([]);
+  readonly unreadByRoom = signal<Record<string, number>>({});
+  readonly activeRoomId = signal<string | null>(null);
+  readonly showUserSearch = signal(false);
+  readonly isSidebarOpen = signal(true);
+  readonly isLoadingUsers = signal(false);
+
+  readonly isDesktop = signal(window.innerWidth > 768);
+  readonly isSidebarVisible = computed(() => this.isSidebarOpen() || this.isDesktop());
+
+  readonly meUserId = computed(() => this.auth.me()?.username ?? 'me');
+  readonly activeRoom = computed(() => this.rooms().find((r) => r.roomId === this.activeRoomId()) ?? null);
+
+  private roomSubscriptions = new Map<string, Subscription>();
+  private globalSub?: Subscription;
+
+  constructor(
+    private readonly roomsApi: RoomsService,
+    public readonly auth: AuthService,
+    public readonly presence: PresenceService,
+    private readonly ws: WebsocketService,
+    private readonly router: Router,
+    private readonly route: ActivatedRoute,
+    private readonly pushService: PushNotificationService,
+    private readonly messagesApi: MessagesService
+  ) {
+    effect(() => {
+      const me = this.auth.me();
+      if (me) {
+        this.loadRooms();
+        this.loadUsers();
+        this.loadUnreadCounts();
+        this.presence.reportOnline();
+        this.pushService.initPushNotifications();
+        this.setupGlobalSubscription(me.username);
+      } else {
+        this.auth.loadProfile().subscribe({ error: () => undefined });
+      }
+    });
+
+    // Efficiently manage room subscriptions
+    effect(() => {
+      const currentRooms = this.rooms();
+      currentRooms.forEach(room => {
+        if (!this.roomSubscriptions.has(room.roomId)) {
+          console.log(`[Chat Layout] 🔗 Subscribing to updates for room: ${room.roomId}`);
+          const sub = this.ws.subscribeRoom(room.roomId).subscribe((evt: any) => {
+            this.handleRoomEvent(room.roomId, evt);
+          });
+          this.roomSubscriptions.set(room.roomId, sub);
+        }
+      });
+    });
+
+    this.route.queryParams.subscribe(params => {
+      const roomId = params['roomId'];
+      if (roomId) {
+        this.activeRoomId.set(roomId);
+        if (!this.isDesktop()) this.isSidebarOpen.set(false);
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      this.isDesktop.set(window.innerWidth > 768);
+    });
+  }
+
+  private setupGlobalSubscription(username: string) {
+    if (this.globalSub) return;
+    console.log(`[Chat Layout] 🌎 Subscribing to global notifications for: ${username}`);
+    this.globalSub = this.ws.subscribeUser(username).subscribe((evt: any) => {
+      console.log('[Chat Layout] 🔔 Global notification received:', evt);
+      // If we receive a message for a room we don't have, reload rooms
+      if (evt && evt.roomId && !this.rooms().some(r => r.roomId === String(evt.roomId))) {
+        console.log(`[Chat Layout] 🆕 New room detected: ${evt.roomId}. Reloading list...`);
+        this.loadRooms();
+      } else if (evt && evt.roomId) {
+        // Even if we have the room, the global event might carry the update
+        this.handleRoomEvent(String(evt.roomId), evt);
+      }
+    });
+  }
+
+  private handleRoomEvent(roomId: string, evt: any) {
+    if (!evt) return;
+
+    // 1. Handle Read Receipt
+    if (evt.type === 'READ_RECEIPT') {
+      if (evt.readerUsername && evt.readerUsername.toLowerCase() === this.meUserId().toLowerCase()) {
+        console.log(`[Chat Layout] ✅ I read messages in room ${roomId}. Resetting unread count.`);
+        this.resetUnreadCount(roomId);
+      }
+      return;
+    }
+
+    // 2. Handle Message or Update
+    if (evt.content !== undefined || evt.message) {
+      const msg = evt.message || evt;
+      this.updateRoomState(roomId, msg);
+    }
+  }
+
+  private updateRoomState(roomId: string, message: any) {
+    const isNowActive = roomId === this.activeRoomId();
+    
+    this.rooms.update(rooms => {
+      const index = rooms.findIndex(r => r.roomId === roomId);
+      if (index === -1) return rooms; // Room not in list yet
+
+      const updatedRoom = {
+        ...rooms[index],
+        lastMessageContent: message.content || message.message,
+        lastMessageAt: message.sentAt || message.timestamp || new Date().toISOString(),
+        lastMessageSender: message.senderId,
+        unreadCount: isNowActive ? 0 : (rooms[index].unreadCount ?? 0) + 1
+      };
+
+      const next = [...rooms];
+      next.splice(index, 1);
+      return [updatedRoom, ...next]; // Move to top
+    });
+
+    if (!isNowActive) {
+      this.unreadByRoom.update(counts => ({
+        ...counts,
+        [roomId]: (counts[roomId] ?? 0) + 1
+      }));
+    } else {
+      this.resetUnreadCount(roomId);
+    }
+  }
+
+  private resetUnreadCount(roomId: string) {
+    this.rooms.update(rooms => rooms.map(r => r.roomId === roomId ? { ...r, unreadCount: 0 } : r));
+    this.unreadByRoom.update(counts => ({ ...counts, [roomId]: 0 }));
+  }
+
+  ngOnDestroy() {
+    this.roomSubscriptions.forEach(s => s.unsubscribe());
+    this.roomSubscriptions.clear();
+    this.globalSub?.unsubscribe();
+  }
+
+  loadUnreadCounts() {
+    this.messagesApi.getUnreadByChat().subscribe({
+      next: (counts) => {
+        this.unreadByRoom.set(counts);
+        // Also sync it into the rooms array
+        this.rooms.update(rooms => rooms.map(r => ({
+          ...r,
+          unreadCount: counts[r.roomId] || 0
+        })));
+      }
+    });
+  }
+
+  loadRooms() {
+    this.roomsApi.getRoomsByUser().subscribe({
+      next: (rooms: Room[]) => {
+        this.rooms.set(rooms);
+        if (!this.activeRoomId() && rooms.length) this.activeRoomId.set(rooms[0]!.roomId);
+      },
+      error: () => {
+        this.rooms.set([]);
+      },
+    });
+  }
+
+  loadUsers() {
+    this.isLoadingUsers.set(true);
+    this.auth.getAllUsers().subscribe({
+      next: (users) => {
+        const myUsername = this.auth.me()?.username;
+        const filtered = (users || []).filter(u => u.username !== myUsername);
+        this.users.set(filtered);
+        this.isLoadingUsers.set(false);
+      },
+      error: () => {
+        this.auth.searchUsers('').subscribe({
+          next: (users) => {
+            const myUsername = this.auth.me()?.username;
+            const filtered = (users || []).filter(u => u.username !== myUsername);
+            this.users.set(filtered);
+            this.isLoadingUsers.set(false);
+          },
+          error: () => {
+            this.users.set([]);
+            this.isLoadingUsers.set(false);
+          }
+        });
+      }
+    });
+  }
+
+  startDM(username: string) {
+    this.roomsApi.getOrCreateDM(username).subscribe({
+      next: (room) => {
+        this.rooms.update(rooms => {
+          if (!rooms.some(r => r.roomId === room.roomId)) {
+            return [room, ...rooms];
+          }
+          return rooms;
+        });
+
+        this.activeRoomId.set(room.roomId);
+        this.router.navigate([], {
+          relativeTo: this.route,
+          queryParams: { roomId: room.roomId },
+          queryParamsHandling: 'merge'
+        });
+      }
+    });
+  }
+
+  onRoomSelected(roomId: string) {
+    this.openRoom(roomId);
+    if (!this.isDesktop()) this.isSidebarOpen.set(false);
+  }
+
+  onDMSelected(username: string) {
+    this.startDM(username);
+    if (!this.isDesktop()) this.isSidebarOpen.set(false);
+  }
+
+  showSidebar() {
+    this.isSidebarOpen.set(true);
+  }
+
+  openRoom(roomId: string) {
+    this.activeRoomId.set(roomId);
+    // Reset unread count for the room being opened
+    this.rooms.update(rooms => rooms.map(r => r.roomId === roomId ? { ...r, unreadCount: 0 } : r));
+    this.unreadByRoom.update(counts => ({ ...counts, [roomId]: 0 }));
+    
+    // Mark messages as read in the backend
+    this.messagesApi.markAsRead(roomId).subscribe();
+
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { roomId },
+      queryParamsHandling: 'merge'
+    });
+  }
+
+  openCreateRoom() {
+    location.href = '/rooms/create';
+  }
+
+  openRoomSettings() {
+    const roomId = this.activeRoomId();
+    if (!roomId) return;
+    location.href = `/rooms/${roomId}/settings`;
+  }
+
+  toggleMembers() {
+  }
+}
+

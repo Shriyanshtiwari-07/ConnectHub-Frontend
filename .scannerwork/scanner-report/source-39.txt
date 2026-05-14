@@ -1,0 +1,470 @@
+import { Component, EventEmitter, Input, Output, computed, signal } from '@angular/core';
+import { NgFor, NgIf } from '@angular/common';
+import { RouterLink } from '@angular/router';
+import type { Room } from '../../../../shared/models/chat.models';
+import type { UserProfile } from '../../../../shared/models/auth.models';
+import { RoomCardComponent } from '../room-card/room-card.component';
+import { CreateGroupModalComponent } from '../create-group-modal/create-group-modal.component';
+
+@Component({
+  selector: 'app-room-sidebar',
+  standalone: true,
+  imports: [NgFor, NgIf, RoomCardComponent, RouterLink, CreateGroupModalComponent],
+  template: `
+    <aside class="sidebar-container animate-in">
+      <!-- SIDEBAR HEADER (WhatsApp Style) -->
+      <header class="sidebar-header">
+        <div class="header-user" *ngIf="me" [routerLink]="['/profile']">
+          <div class="user-avatar">
+            <img *ngIf="me.avatarUrl; else noAvatar" [src]="me.avatarUrl" alt="Avatar" />
+            <ng-template #noAvatar>{{ me.username[0].toUpperCase() }}</ng-template>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="h-btn" (click)="showCreateGroup.set(true)" title="New Group">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+              <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- SEARCH SECTION -->
+      <div class="search-section">
+        <div class="search-inner">
+          <div class="search-bar" [class.focused]="isSearchFocused()">
+            <span class="search-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+              </svg>
+            </span>
+            <input 
+              #searchInput
+              placeholder="Search or start new chat" 
+              (input)="userQuery.set(searchInput.value)" 
+              (focus)="isSearchFocused.set(true)"
+              (blur)="isSearchFocused.set(false)"
+            />
+            <button class="clear-btn" *ngIf="userQuery()" (click)="userQuery.set(''); searchInput.value = ''">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- TABS -->
+      <div class="tabs">
+        <button [class.active]="activeTab() === 'USERS'" (click)="activeTab.set('USERS')">Users</button>
+        <button [class.active]="activeTab() === 'GROUPS'" (click)="activeTab.set('GROUPS')">Groups</button>
+      </div>
+
+      <!-- LISTS -->
+      <div class="list-container scroll">
+        <!-- DIRECT CONVERSATIONS (Users) -->
+        <div *ngIf="activeTab() === 'USERS'">
+          <div class="loading-state" *ngIf="_loading() && unifiedDirectList().length === 0">
+            <p>Loading users...</p>
+          </div>
+
+          <app-room-card
+            *ngFor="let r of unifiedDirectList()"
+            [room]="r"
+            [active]="r.roomId === activeRoomId"
+            (click)="r.roomId.startsWith('USER_') ? openDM.emit(r.roomId.replace('USER_', '')) : openRoom.emit(r.roomId)"
+          />
+          
+          <div class="empty-state" *ngIf="!_loading() && unifiedDirectList().length === 0">
+            <p *ngIf="userQuery()">No users found matching "{{ userQuery() }}"</p>
+            <p *ngIf="!userQuery()">No users available to chat.</p>
+          </div>
+        </div>
+
+        <!-- GROUPS -->
+        <div *ngIf="activeTab() === 'GROUPS'">
+          <div class="col-header">
+            <span class="title">My Groups</span>
+            <button class="add-btn" (click)="showCreateGroup.set(true)">+</button>
+          </div>
+          <app-room-card
+            *ngFor="let r of groupRooms()"
+            [room]="r"
+            [active]="r.roomId === activeRoomId"
+            (click)="openRoom.emit(r.roomId)"
+          />
+        </div>
+      </div>
+
+      <app-create-group-modal 
+        *ngIf="showCreateGroup()" 
+        (close)="showCreateGroup.set(false)"
+        (groupCreated)="onGroupCreated($event)"
+      />
+    </aside>
+  `,
+  styles: `
+    .sidebar-container {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+    }
+    
+    .sidebar-header {
+      height: 59px;
+      padding: 10px 16px;
+      background: var(--panel-2);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .user-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: white;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      overflow: hidden;
+      cursor: pointer;
+    }
+    .user-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .header-actions { display: flex; gap: 8px; }
+    .h-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 20px;
+      display: grid;
+      place-items: center;
+      transition: background 0.2s;
+    }
+    .h-btn:hover { background: var(--chip); color: var(--text); }
+
+    .search-section {
+      padding: 8px 12px;
+      background: var(--panel);
+    }
+    .search-inner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .search-bar {
+      flex: 1;
+      height: 38px;
+      background: var(--panel-2);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      padding: 0 10px;
+      gap: 10px;
+      border: 1px solid transparent;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .search-bar.focused {
+      background: var(--panel);
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent);
+    }
+    .search-icon {
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      transition: color 0.2s;
+    }
+    .search-bar.focused .search-icon {
+      color: var(--primary);
+    }
+    .search-bar input {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 14px;
+      width: 100%;
+      outline: none;
+      padding: 4px 0;
+    }
+    .search-bar input::placeholder {
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .clear-btn {
+      background: var(--chip);
+      border: none;
+      color: var(--muted);
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      padding: 0;
+      transition: all 0.2s;
+    }
+    .clear-btn:hover {
+      background: var(--panel-3);
+      color: var(--text);
+    }
+    .filter-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      transition: background 0.2s;
+    }
+    .filter-btn:hover {
+      background: var(--chip);
+      color: var(--text);
+    }
+
+    .tabs {
+      display: flex;
+      padding: 0 16px;
+      gap: 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tabs button {
+      height: 40px;
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      position: relative;
+    }
+    .tabs button.active {
+      color: var(--primary);
+    }
+    .tabs button.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--primary);
+    }
+
+    .list-container { flex: 1; overflow-y: auto; }
+    
+    .section-title {
+      padding: 20px 16px 10px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .user-block {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 12px;
+      padding: 12px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid rgba(var(--border-rgb), 0.3);
+    }
+    .user-block:hover { background: var(--chip); }
+    .col-av { position: relative; }
+    .avatar-box {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      background: var(--chip);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: var(--text);
+    }
+    .status-dot {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #4b5563;
+      border: 2px solid var(--panel);
+    }
+    .status-dot.online { background: var(--success); }
+    
+    .col-info { display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+    .name { font-weight: 700; font-size: 15px; }
+    .preview-row { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .col-header {
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .add-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: white;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+    }
+  `,
+})
+export class RoomSidebarComponent {
+  private readonly _rooms = signal<Room[]>([]);
+  @Input({ required: true }) set rooms(val: Room[]) { this._rooms.set(val); }
+  get rooms() { return this._rooms(); }
+
+  private readonly _users = signal<UserProfile[]>([]);
+  @Input({ required: true }) set users(val: UserProfile[]) { this._users.set(val); }
+  get users() { return this._users(); }
+
+  private readonly _me = signal<UserProfile | null>(null);
+  @Input() set me(val: UserProfile | null) { this._me.set(val); }
+  get me() { return this._me(); }
+
+  private readonly _activeRoomId = signal<string | null>(null);
+  @Input() set activeRoomId(val: string | null) { this._activeRoomId.set(val); }
+  get activeRoomId() { return this._activeRoomId(); }
+
+  private readonly _unreadByRoom = signal<Record<string, number>>({});
+  @Input() set unreadByRoom(val: Record<string, number>) { this._unreadByRoom.set(val); }
+  get unreadByRoom() { return this._unreadByRoom(); }
+
+  private readonly _presenceMap = signal<Record<string, any>>({});
+  @Input() set presenceMap(val: Record<string, any>) { this._presenceMap.set(val); }
+  get presenceMap() { return this._presenceMap(); }
+
+  public readonly _loading = signal(false);
+  @Input() set loading(val: boolean) { this._loading.set(val); }
+  get loading() { return this._loading(); }
+
+  @Output() openRoom = new EventEmitter<string>();
+  @Output() openDM = new EventEmitter<string>();
+  @Output() createRoom = new EventEmitter<void>();
+
+  readonly activeTab = signal<'USERS' | 'GROUPS'>('USERS');
+  readonly userQuery = signal('');
+  readonly isSearchFocused = signal(false);
+  readonly showCreateGroup = signal(false);
+
+  onGroupCreated(room: any) {
+    this.openRoom.emit(room.roomId);
+    this.activeTab.set('GROUPS');
+  }
+  
+  readonly filteredUsers = computed(() => {
+    const q = this.userQuery().toLowerCase().trim();
+    const myUsername = this._me()?.username;
+    
+    let list = this._users();
+    if (myUsername) {
+      list = list.filter(u => u.username !== myUsername);
+    }
+    
+    if (!q) return list;
+    return list.filter(u => 
+      u.username.toLowerCase().includes(q) || 
+      (u.fullName || '').toLowerCase().includes(q)
+    );
+  });
+
+  readonly directRooms = computed(() => {
+    return this._rooms().filter(r => r.type === 'DM');
+  });
+
+  readonly unifiedDirectList = computed(() => {
+    const q = this.userQuery().toLowerCase().trim();
+    const me = this._me();
+    const myUsername = me?.username?.toLowerCase();
+    const currentPresenceMap = this._presenceMap();
+    const currentUsers = this._users();
+    
+    // 1. Start with all real DM rooms and attach presence
+    const realRooms = this.directRooms().map(r => ({
+      ...r,
+      status: currentPresenceMap[r.name]?.status || 'OFFLINE'
+    }));
+    
+    // 2. Identify usernames we already have a DM room for
+    const existingDMUsernames = new Set<string>();
+    realRooms.forEach(r => {
+      const roomNameLower = r.name.toLowerCase();
+      const matchedUser = currentUsers.find(u => 
+        u.username.toLowerCase() === roomNameLower || 
+        (u.fullName || '').toLowerCase() === roomNameLower
+      );
+      if (matchedUser) {
+        existingDMUsernames.add(matchedUser.username.toLowerCase());
+      } else {
+        existingDMUsernames.add(roomNameLower);
+      }
+    });
+
+    // 3. Create virtual rooms for all other users
+    const virtualRooms: Room[] = currentUsers
+      .filter(u => {
+        const un = u.username.toLowerCase();
+        return un !== myUsername && !existingDMUsernames.has(un);
+      })
+      .map(u => ({
+        roomId: `USER_${u.username}`,
+        name: u.fullName || u.username,
+        type: 'DM',
+        avatarUrl: u.avatarUrl,
+        lastMessageContent: 'Start a conversation',
+        unreadCount: 0,
+        status: currentPresenceMap[u.username]?.status || 'OFFLINE'
+      }));
+
+    // 4. Merge and Filter by search query
+    let merged = [...realRooms, ...virtualRooms];
+    
+    if (q) {
+      merged = merged.filter(r => 
+        r.name.toLowerCase().includes(q) || 
+        (r.lastMessageContent || '').toLowerCase().includes(q)
+      );
+    }
+
+    // 5. Sort: Real chats with messages first, then virtual ones alphabetically
+    return merged.sort((a, b) => {
+      const isAVirtual = a.roomId.startsWith('USER_');
+      const isBVirtual = b.roomId.startsWith('USER_');
+
+      if (!isAVirtual && !isBVirtual) {
+        const ta = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+        const tb = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+        return tb - ta;
+      }
+      
+      if (!isAVirtual) return -1;
+      if (!isBVirtual) return 1;
+      
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  });
+
+  readonly groupRooms = computed(() => {
+    return this._rooms().filter(r => r.type === 'GROUP').sort((a, b) => {
+      const ta = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0;
+      const tb = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0;
+      return tb - ta;
+    });
+  });
+}

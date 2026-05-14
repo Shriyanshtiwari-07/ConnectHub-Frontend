@@ -1,0 +1,568 @@
+import { Component, EventEmitter, Input, Output, computed, effect, signal, ChangeDetectorRef, Signal, ViewChild, ElementRef } from '@angular/core';
+import { NgFor, NgIf } from '@angular/common';
+import type { Message, Room } from '../../../../shared/models/chat.models';
+import { RoomHeaderComponent } from '../room-header/room-header.component';
+import { MessageBubbleComponent } from '../message-bubble/message-bubble.component';
+import { MessageInputComponent } from '../message-input/message-input.component';
+import { TypingIndicatorComponent } from '../typing-indicator/typing-indicator.component';
+import { MessagesService } from '../../services/messages.service';
+import { WebsocketService } from '../../../../core/services/websocket.service';
+import { FileService } from '../../../../core/services/file.service';
+import { RoomsService } from '../../../rooms/services/rooms.service';
+import { InviteModalComponent } from '../invite-modal/invite-modal.component';
+import { PresenceService, type PresenceInfo } from '../../../../core/services/presence.service';
+import { GroupInfoPanelComponent } from '../group-info-panel/group-info-panel.component';
+import { UserProfilePanelComponent } from '../user-profile-panel/user-profile-panel.component';
+
+@Component({
+  selector: 'app-chat-window',
+  standalone: true,
+  imports: [
+    NgIf,
+    NgFor,
+    RoomHeaderComponent,
+    MessageBubbleComponent,
+    MessageInputComponent,
+    TypingIndicatorComponent,
+    GroupInfoPanelComponent,
+    UserProfilePanelComponent,
+    InviteModalComponent,
+  ],
+  template: `
+    <section class="window" *ngIf="room; else empty">
+      <app-room-header
+        [room]="room"
+        [onlineCount]="onlineCount()"
+        [peerPresence]="peerPresence()"
+        (openMembers)="toggleGroupInfo()"
+        (openInvite)="showInviteModal.set(true)"
+        (openRoomSettings)="toggleGroupInfo()"
+        (deleteRoom)="onDeleteRoom()"
+        (goBack)="goBack.emit()"
+      />
+
+      <div class="body">
+        <div class="messages scroll" #scroller>
+          <app-message-bubble
+            *ngFor="let m of messages()"
+            [message]="m"
+            [isMine]="m.senderId === meUserId"
+            (reply)="setReply(m)"
+            (edit)="setEdit(m)"
+            (delete)="deleteMessage(m)"
+          />
+
+          <app-typing-indicator *ngIf="typingText() as t" [text]="t" />
+        </div>
+
+        <div class="info-panel-wrapper" [class.open]="groupInfoOpen()">
+          <ng-container *ngIf="groupInfoOpen()">
+            <app-group-info-panel 
+              *ngIf="room.type === 'GROUP'"
+              [room]="room" 
+              (close)="groupInfoOpen.set(false)" 
+              (roomUpdated)="onRoomUpdated()"
+            />
+            <app-user-profile-panel
+              *ngIf="room.type === 'DM'"
+              [room]="room"
+              (close)="groupInfoOpen.set(false)"
+            />
+          </ng-container>
+        </div>
+      </div>
+
+      <app-message-input
+        [replyTo]="replyTo()"
+        [editing]="editing()"
+        (cancelReply)="replyTo.set(null)"
+        (cancelEdit)="editing.set(null)"
+        (send)="send($event)"
+        (typing)="typing($event)"
+      />
+
+      <app-invite-modal
+        *ngIf="showInviteModal() && room"
+        [roomId]="room.roomId"
+        (close)="showInviteModal.set(false)"
+      />
+    </section>
+
+    <ng-template #empty>
+      <div class="empty">
+        <div class="h">Select a chat</div>
+        <div class="p">Pick a room from the left to start messaging.</div>
+      </div>
+    </ng-template>
+  `,
+  styles: `
+    .window {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background: var(--app-bg);
+      min-width: 0;
+      position: relative;
+    }
+    .body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      position: relative;
+      z-index: 2;
+    }
+    .messages {
+      min-height: 0;
+      overflow: auto;
+      padding: 20px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.2) transparent;
+    }
+    .info-panel-wrapper {
+      width: 0;
+      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow: hidden;
+      border-left: 0px solid transparent;
+    }
+    .info-panel-wrapper.open {
+      width: 350px;
+      border-left: 1px solid var(--border);
+    }
+    .window :host ::ng-deep app-message-input {
+      position: relative;
+      z-index: 10;
+    }
+    .empty {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      text-align: center;
+      padding: 40px;
+    }
+    .empty-icon {
+      font-size: 64px;
+      margin-bottom: 20px;
+      opacity: 0.2;
+    }
+    .h {
+      color: var(--text);
+      font-weight: 800;
+      font-size: 24px;
+      margin-bottom: 12px;
+      font-family: var(--font-display);
+    }
+    .p {
+      font-size: 15px;
+      max-width: 320px;
+      line-height: 1.6;
+    }
+    @media (max-width: 768px) {
+      .body {
+        grid-template-columns: 1fr;
+      }
+    }
+  `,
+})
+export class ChatWindowComponent {
+  private readonly _room = signal<Room | null>(null);
+  @Input() set room(value: Room | null) {
+    this._room.set(value);
+  }
+  get room() {
+    return this._room();
+  }
+
+  @Input() meUserId = 'me';
+
+  @Output() openMembers = new EventEmitter<void>();
+  @Output() openRoomSettings = new EventEmitter<void>();
+  @Output() roomDeleted = new EventEmitter<void>();
+  @Output() goBack = new EventEmitter<void>();
+
+  readonly messages = signal<Message[]>([]);
+  readonly replyTo = signal<Message | null>(null);
+  readonly editing = signal<Message | null>(null);
+  readonly groupInfoOpen = signal(false);
+  readonly showInviteModal = signal(false);
+
+  readonly onlineCount: Signal<number>;
+  readonly peerPresence: Signal<PresenceInfo | null>;
+  readonly typingText = signal<string | null>(null);
+
+  @ViewChild('scroller') scroller?: ElementRef<HTMLDivElement>;
+
+  constructor(
+    private readonly messagesApi: MessagesService,
+    private readonly ws: WebsocketService,
+    private readonly fileService: FileService,
+    private readonly roomsApi: RoomsService,
+    public readonly presence: PresenceService,
+    private readonly cdr: ChangeDetectorRef,
+  ) {
+    // Scroll to bottom whenever messages update
+    effect(() => {
+      this.messages(); // Track dependency
+      this.scrollToBottom();
+    });
+
+    this.onlineCount = computed(() => {
+      const room = this._room();
+      if (!room) return 0;
+      
+      const presenceMap = this.presence.presenceMap();
+      
+      if (room.type === 'DM') {
+        const username = room.peerUsername || room.name;
+        const isOnline = presenceMap[username]?.status === 'ONLINE';
+        return isOnline ? 1 : 0;
+      }
+      
+      return 0;
+    });
+
+    this.peerPresence = computed(() => {
+      const room = this._room();
+      if (!room || room.type !== 'DM') return null;
+      const username = room.peerUsername || room.name;
+      return this.presence.presenceMap()[username] || null;
+    });
+    effect(() => {
+      const room = this._room();
+      const roomId = room?.roomId;
+      if (!roomId) return;
+
+      console.log(`[Chat Window] 🚪 Entering room: ${roomId}. Loading history and subscribing...`);
+      this.loadHistory(roomId);
+      this.ws.sendReadReceipt({ readerId: this.meUserId, roomId: roomId, upToMessageId: 'latest' });
+
+      const sub = this.ws.subscribeRoom(roomId).subscribe({
+        next: (evt) => {
+          console.log(`[Chat Window] 💬 Real-time event for room ${roomId}:`, evt);
+          this.applyRoomEvent(evt);
+          this.cdr.markForCheck();
+        },
+        error: (err) => console.error(`[Chat Window] ❌ Subscription error for room ${roomId}:`, err),
+      });
+
+      return () => {
+        console.log(`[Chat Window] 🏃 Leaving room: ${roomId}. Unsubscribing...`);
+        sub.unsubscribe();
+      };
+    });
+  }
+
+  loadHistory(roomId: string) {
+    this.messagesApi.getRoomMessages(roomId).subscribe({
+      next: (msgs) => {
+        this.messages.set([...msgs]);
+        
+        // Check for any messages that are 'SENT' but not 'DELIVERED' where I am the recipient
+        const hasUndelivered = msgs.some(m => 
+          m.senderId.toLowerCase() !== this.meUserId.toLowerCase() && 
+          m.deliveryStatus === 'SENT'
+        );
+        
+        if (hasUndelivered) {
+          console.log(`[Chat Window] 🚚 Found undelivered messages in history for room ${roomId}. Sending receipt...`);
+          this.ws.sendDeliveryReceipt({ readerId: this.meUserId, roomId });
+        }
+      },
+      error: () => this.messages.set([]),
+    });
+  }
+
+  send(payload: { text: string; files?: File[] }) {
+    if (!this.room) return;
+    const trimmed = payload.text.trim();
+    const files = payload.files || [];
+    
+    if (!trimmed && files.length === 0) return;
+
+    const roomId = this.room.roomId;
+    const sentAt = new Date().toISOString();
+
+    // Handle Edit
+    const editMsg = this.editing();
+    if (editMsg && trimmed) {
+      this.messages.update(cur => cur.map(m => m.messageId === editMsg.messageId ? { ...m, content: trimmed, deliveryStatus: 'SENDING' } : m));
+      this.messagesApi.editMessage(editMsg.messageId, trimmed).subscribe({
+        next: (res) => {
+          console.log('[Chat Window] Message edited successfully');
+          // WebSocket will broadcast the update, but we update locally too
+          this.messages.update(cur => cur.map(m => m.messageId === res.messageId ? res : m));
+        },
+        error: (err) => {
+          console.error('Failed to edit message', err);
+          alert('Failed to edit message');
+        }
+      });
+      this.editing.set(null);
+      return;
+    }
+
+    // 1. Handle Text Message if present
+    if (trimmed && files.length === 0) {
+      this.sendTextMessage(trimmed, roomId, sentAt);
+    } 
+    // 2. Handle File Uploads in parallel
+    else if (files.length > 0) {
+      // If there's text with files, send text first (optional choice, let's include text in the first file message or send separate)
+      // Standard behavior: text becomes the caption of the first file.
+      
+      files.forEach((file, index) => {
+        const isImage = file.type.startsWith('image/');
+        const tempId = `tmp-${crypto.randomUUID()}`;
+        const localUrl = isImage ? URL.createObjectURL(file) : '';
+        
+        // Create optimistic message for each file
+        const optimistic: Message = {
+          messageId: tempId,
+          roomId: roomId,
+          senderId: this.meUserId,
+          type: isImage ? 'IMAGE' : 'FILE',
+          content: index === 0 ? trimmed : '', // Only first file gets the text as caption
+          sentAt,
+          deliveryStatus: 'SENDING',
+          mediaUrl: localUrl,
+          fileName: file.name,
+          mimeType: file.type,
+          sizeKb: Math.round(file.size / 1024),
+        };
+        
+        this.messages.update(cur => [...cur, optimistic]);
+
+        // Start upload
+        this.fileService.upload(file).subscribe({
+          next: (res) => {
+            this.ws.sendChatMessage({
+              senderUsername: this.meUserId,
+              roomId: roomId,
+              type: isImage ? 'IMAGE' : 'FILE',
+              content: index === 0 ? trimmed : '',
+              mediaUrl: res.url,
+              fileName: res.fileName,
+              mimeType: res.mimeType,
+              sizeKb: res.sizeKb,
+              replyToMessageId: this.replyTo()?.messageId,
+            });
+            
+            // Clean up local URL if it was created
+            if (localUrl) URL.revokeObjectURL(localUrl);
+          },
+          error: (err) => {
+            console.error('Upload failed', err);
+            this.messages.update(cur => cur.map(m => m.messageId === tempId ? { ...m, deliveryStatus: 'FAILED' } : m));
+            if (localUrl) URL.revokeObjectURL(localUrl);
+          }
+        });
+      });
+    }
+
+    this.replyTo.set(null);
+    this.editing.set(null);
+  }
+  private sendTextMessage(content: string, roomId: string, sentAt: string) {
+    const tempId = `tmp-${crypto.randomUUID()}`;
+    const optimistic: Message = {
+      messageId: tempId,
+      roomId: roomId,
+      senderId: this.meUserId,
+      type: 'TEXT',
+      content,
+      sentAt,
+      deliveryStatus: 'SENDING',
+      replyToMessageId: this.replyTo()?.messageId,
+    };
+    this.messages.update((cur) => [...cur, optimistic]);
+
+    this.ws.sendChatMessage({
+      senderUsername: this.meUserId,
+      roomId: roomId,
+      type: 'TEXT',
+      content,
+      replyToMessageId: this.replyTo()?.messageId,
+    });
+  }
+
+  typing(isTyping: boolean) {
+    if (!this.room) return;
+    this.ws.sendTyping({ senderId: this.meUserId, roomId: this.room.roomId, isTyping });
+  }
+
+  setReply(m: Message) {
+    this.replyTo.set(m);
+  }
+
+  toggleGroupInfo() {
+    this.groupInfoOpen.update((v) => !v);
+  }
+
+  onRoomUpdated() {
+    this.roomDeleted.emit(); // Refresh room list in layout
+  }
+
+  setEdit(m: Message) {
+    if (m.senderId !== this.meUserId) return;
+    this.editing.set(m);
+  }
+
+  deleteMessage(m: Message) {
+    if (m.senderId !== this.meUserId) return;
+    const ok = confirm('Are you sure you want to delete this message for everyone?');
+    if (!ok) return;
+
+    // Optimistic UI update
+    this.messages.update((cur) => cur.map((x) => (x.messageId === m.messageId ? { ...x, isDeleted: true, content: '' } : x)));
+
+    this.messagesApi.deleteMessage(m.messageId).subscribe({
+      next: () => {
+        console.log(`[Chat Window] Message ${m.messageId} deleted successfully`);
+      },
+      error: (err) => {
+        console.error('Failed to delete message', err);
+        alert('Failed to delete message. Please try again.');
+        // Revert optimistic update? Or just leave it and let refresh fix it
+      }
+    });
+  }
+
+  onDeleteRoom() {
+    if (!this.room) return;
+    const ok = confirm(`Are you sure you want to delete "${this.room.name}"? All messages and members will be permanently removed.`);
+    if (!ok) return;
+
+    this.roomsApi.deleteRoom(this.room.roomId).subscribe({
+      next: () => {
+        this.roomDeleted.emit();
+        window.location.reload();
+      },
+      error: (e: any) => {
+        alert(e?.error?.message || 'Failed to delete room. You might not have permission.');
+      },
+    });
+  }
+
+  private applyRoomEvent(evt: unknown) {
+    if (!evt) return;
+    const anyEvt = evt as any;
+
+    // 0. Read receipt
+    if (anyEvt.type === 'READ_RECEIPT') {
+      const readerId = anyEvt.readerUsername;
+      if (readerId && readerId.toLowerCase() !== this.meUserId.toLowerCase()) {
+        console.log(`[Chat Window] ✅ Peer ${readerId} read messages in room ${anyEvt.roomId}`);
+        this.messages.update(cur => cur.map(m => m.senderId.toLowerCase() === this.meUserId.toLowerCase() ? { ...m, isRead: true, deliveryStatus: 'READ' } : m));
+      }
+      return;
+    }
+
+    // 0.2 Message deleted
+    if (anyEvt.type === 'MESSAGE_DELETED') {
+      const deletedMessageId = anyEvt.messageId;
+      if (deletedMessageId) {
+        console.log(`[Chat Window] 🗑️ Peer deleted message ${deletedMessageId}`);
+        this.messages.update(cur => cur.map(m => m.messageId === deletedMessageId ? { ...m, isDeleted: true, content: '' } : m));
+      }
+      return;
+    }
+
+    // 0.1 Delivery receipt
+    if (anyEvt.type === 'DELIVERY_RECEIPT') {
+      const recipientId = anyEvt.recipientUsername;
+      if (recipientId && recipientId.toLowerCase() !== this.meUserId.toLowerCase()) {
+        console.log(`[Chat Window] 🚚 Peer ${recipientId} received messages in room ${anyEvt.roomId}`);
+        this.messages.update(cur => cur.map(m => (m.senderId.toLowerCase() === this.meUserId.toLowerCase() && m.deliveryStatus === 'SENT') ? { ...m, deliveryStatus: 'DELIVERED' } : m));
+      }
+      return;
+    }
+
+    // 1. Typing indicator
+    if (anyEvt.type === 'TYPING_INDICATOR' || anyEvt.payload?.isTyping !== undefined) {
+      const p = anyEvt.payload || anyEvt;
+      const senderId = p.senderId || p.userId;
+      if (senderId && senderId.toLowerCase() !== this.meUserId.toLowerCase() && p.isTyping) {
+        this.typingText.set(`${senderId} is typing…`);
+        window.clearTimeout((this as any)._typingT);
+        (this as any)._typingT = window.setTimeout(() => this.typingText.set(null), 3000);
+      } else if (!p.isTyping) {
+        this.typingText.set(null);
+      }
+      return;
+    }
+
+    // 2. Extract message
+    const msgData = anyEvt.message || anyEvt;
+    if (!msgData?.messageId) {
+      // If it's a raw message without messageId but has content, it might be a malformed event
+      if (anyEvt.content) {
+        console.warn('[Chat Window] ⚠️ Received message-like event without messageId:', anyEvt);
+      }
+      return;
+    }
+
+    const msg = msgData as Message;
+
+    // FIX: Normalize roomId to string for comparison (backend MessageResponse sends
+    // roomId as String "13" but RoomResponse sends roomId as Long/number 13).
+    const msgRoomId = String(msg.roomId);
+    const currentRoomId = String(this.room?.roomId ?? '');
+
+    console.log(`[Chat Window] 📨 Message event: id=${msg.messageId}, sender=${msg.senderId}, room=${msgRoomId}, currentRoom=${currentRoomId}`);
+
+    // 3. Update messages
+    this.messages.update((cur) => {
+      // Already have this real message ID — update in place
+      const existsIdx = cur.findIndex((m) => String(m.messageId) === String(msg.messageId));
+      if (existsIdx !== -1) {
+        console.log(`[Chat Window] 🔄 Updating existing message ${msg.messageId}`);
+        const next = [...cur];
+        next[existsIdx] = { ...next[existsIdx], ...msg, deliveryStatus: msg.deliveryStatus || 'DELIVERED' };
+        return next;
+      }
+
+      // Match optimistic by sender + content
+      if ((msg.senderId || '').toLowerCase() === this.meUserId.toLowerCase()) {
+        const tmpIdx = cur.findLastIndex(
+          (m) => m.messageId.startsWith('tmp-') && m.content === msg.content
+        );
+        if (tmpIdx !== -1) {
+          console.log(`[Chat Window] ✅ Reconciled optimistic msg ${cur[tmpIdx].messageId} → ${msg.messageId}`);
+          const next = [...cur];
+          next[tmpIdx] = { ...msg, deliveryStatus: msg.deliveryStatus || 'DELIVERED' };
+          return next;
+        }
+      }
+
+      // New message — use String comparison to avoid type mismatch
+      if (msgRoomId === currentRoomId) {
+        console.log(`[Chat Window] ➕ Adding new message from ${msg.senderId}: "${msg.content}"`);
+        
+        // Auto-send read receipt if we are in this room
+        if (msg.senderId.toLowerCase() !== this.meUserId.toLowerCase()) {
+          this.ws.sendDeliveryReceipt({ readerId: this.meUserId, roomId: currentRoomId });
+          this.ws.sendReadReceipt({ readerId: this.meUserId, roomId: currentRoomId, upToMessageId: msg.messageId });
+        }
+
+        // Ensure new messages from others are marked as SENT
+        return [...cur, { ...msg, deliveryStatus: msg.deliveryStatus || 'SENT' }];
+      } else {
+        console.warn(`[Chat Window] ⚠️ Room mismatch: msg.roomId=${msgRoomId}, current=${currentRoomId}. Ignoring message.`);
+      }
+      return cur;
+    });
+  }
+
+  scrollToBottom() {
+    setTimeout(() => {
+      if (this.scroller?.nativeElement) {
+        this.scroller.nativeElement.scrollTop = this.scroller.nativeElement.scrollHeight;
+      }
+    }, 100);
+  }
+}
