@@ -15,9 +15,6 @@ test-results/
 # SonarQube
 .scannerwork/
 
-# Environment files
-src/environments/environment*.ts
-
 # Logs
 *.log
 npm-debug.log*
